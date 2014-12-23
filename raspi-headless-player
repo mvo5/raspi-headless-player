@@ -17,27 +17,6 @@ GObject.threads_init()
 Gst.init(None)
 
 
-class KeyboardIO(GObject.GObject):
-
-    __gsignals__ = {
-        'key': (GObject.SIGNAL_RUN_FIRST, None,
-                (int,))
-    }
-
-    def __init__(self):
-        super(KeyboardIO, self).__init__()
-        self.screen = curses.initscr()
-        curses.noecho()
-        curses.cbreak()
-        self.screen.keypad(True)
-        GLib.io_add_watch(sys.stdin, GLib.IO_IN, self.io_callback)
-
-    def io_callback(self, fd, condition):
-        key = self.screen.getch()
-        self.emit("key", key)
-        return True
-
-
 # COMPAT only, once a new gudev is available we can use
 #        device.get_parent()
 def get_parent(device):
@@ -118,16 +97,25 @@ def find_all_titles(mount_point):
     return sorted(all_media)
 
 
-def find_resume_marker(mount_point):
-    # FIXME
-    resume_title = None
-    resume_time = 5494823000L
-    return resume_title, resume_time
+class KeyboardIO(GObject.GObject):
 
+    __gsignals__ = {
+        'key': (GObject.SIGNAL_RUN_FIRST, None,
+                (int,))
+    }
 
-def set_resume_marker(mount_point):
-    # FIXME:
-    return True
+    def __init__(self):
+        super(KeyboardIO, self).__init__()
+        self.screen = curses.initscr()
+        curses.noecho()
+        curses.cbreak()
+        self.screen.keypad(True)
+        GLib.io_add_watch(sys.stdin, GLib.IO_IN, self.io_callback)
+
+    def io_callback(self, fd, condition):
+        key = self.screen.getch()
+        self.emit("key", key)
+        return True
 
 
 class GstPlayer():
@@ -156,11 +144,14 @@ class GstPlayer():
         self.current_title_index -= 1
         self.play()
 
+    @property
+    def title(self):
+        return self.all_titles[self.current_title_index]
+
     def play(self, resume_time=None):
         self.pipeline.set_state(Gst.State.NULL)
-        title = self.all_titles[self.current_title_index]
-        print("Playing {}".format(title))
-        self.pipeline.props.uri = 'file://'+title
+        print("Playing {}".format(self.title))
+        self.pipeline.props.uri = 'file://'+self.title
         if resume_time:
             self.pipeline.set_state(Gst.State.PAUSED)
             res = self.pipeline.get_state(10*self.NANO_SEC)
@@ -172,7 +163,6 @@ class GstPlayer():
             if not res:
                 print("seek_simple() failed")
         self.pipeline.set_state(Gst.State.PLAYING)
-        set_resume_marker(title)
 
     def on_gstreamer_message(self, bus, msg):
         # print(msg.type)
@@ -183,6 +173,8 @@ class GstPlayer():
 
 class Controller:
 
+    MARKER_FILE = "current_title"
+
     def __init__(self):
         keyboard = KeyboardIO()
         keyboard.connect("key", self.on_key_event)
@@ -191,25 +183,28 @@ class Controller:
 
     def run(self):
         client = GUdev.Client()
-        mount_point = mount_removable_medium(client)
-        if not mount_point:
+        self.mount_point = mount_removable_medium(client)
+        if not self.mount_point:
             return False
-        print("Using '{}'".format(mount_point))
+        print("Using '{}'".format(self.mount_point))
 
-        all_titles = find_all_titles(mount_point)
+        all_titles = find_all_titles(self.mount_point)
         print("Found: '{}'".format(all_titles))
 
         start_from = 0
-        resume_title, resume_time = find_resume_marker(mount_point)
+        resume_title, resume_time = self.find_resume_marker()
         if resume_title:
             print("Resuming from: {}".format(resume_title))
-            start_from = all_titles.index(resume_title)
+            try:
+                start_from = all_titles.index(resume_title)
+            except ValueError:
+                print("Can not find '{}'".format(resume_title))
 
         self.player = GstPlayer(all_titles, start_from)
         self.player.play(resume_time)
 
-        mainloop = GObject.MainLoop()
-        mainloop.run()
+        self.mainloop = GObject.MainLoop()
+        self.mainloop.run()
 
     def on_key_event(self, keyboard, key):
         if key == curses.KEY_UP:
@@ -220,10 +215,32 @@ class Controller:
             self.player.play_prev()
         elif key == curses.KEY_RIGHT:
             self.player.play_next()
+        elif key == ord("q"):
+            self.mainloop.quit()
+
+    def set_resume_marker(self):
+        ok, pos = self.player.pipeline.query_position(Gst.Format.TIME)
+        if not ok:
+            return False
+        target = os.path.join(self.mount_point, self.MARKER_FILE)
+        with open(target+".new", "w") as fp:
+            fp.write("{}\n{}\n".format(self.player.title, pos))
+        os.rename(target+".new", target)
+        return True
+
+    def find_resume_marker(self):
+        target = os.path.join(self.mount_point, self.MARKER_FILE)
+        if os.path.exists(target):
+            with open(target) as fp:
+                resume_title = fp.readline().strip()
+                resume_time = int(fp.readline().strip())
+                return resume_title, resume_time
+        return None, None
 
     def on_timeout(self):
+        self.set_resume_marker()
         if self.player:
-            print(self.player.pipeline.query_position(Gst.Format.TIME))
+            self.set_resume_marker()
         return True
 
 
