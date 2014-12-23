@@ -1,7 +1,6 @@
 #!/usr/bin/python
 
 import curses
-import fcntl
 import fnmatch
 import os
 import subprocess
@@ -16,12 +15,6 @@ from gi.repository import (
 )
 GObject.threads_init()
 Gst.init(None)
-
-
-from detect import (
-    find_removable_media,
-    get_mount_path_for_devname,
-)
 
 
 class KeyboardIO(GObject.GObject):
@@ -76,7 +69,7 @@ def debug_device(device):
 
 def filter_by_subsystem(udev_client, subsystem, filterfunc):
     return [dev.get_device_file()
-            for dev in udev_client.query_by_subsystem(subsystem) 
+            for dev in udev_client.query_by_subsystem(subsystem)
             if filterfunc(dev)]
 
 
@@ -112,7 +105,7 @@ def mount_removable_medium(client):
     if not mount_point:
         mount_point = tempfile.mkdtemp()
         subprocess.check_call([
-            "mount", "-o ", "sync", removables[0], mount_point])
+            "mount", "-o", "sync", removables[0], mount_point])
     return mount_point
 
 
@@ -138,7 +131,7 @@ def set_resume_marker(mount_point):
 
 
 class GstPlayer():
-    
+
     NANO_SEC = 1000000000
 
     def __init__(self, all_titles, current_title_index):
@@ -158,7 +151,7 @@ class GstPlayer():
     def play_next(self):
         self.current_title_index += 1
         self.play()
-    
+
     def play_prev(self):
         self.current_title_index -= 1
         self.play()
@@ -171,14 +164,18 @@ class GstPlayer():
         if resume_time:
             self.pipeline.set_state(Gst.State.PAUSED)
             res = self.pipeline.get_state(10*self.NANO_SEC)
+            if not res:
+                print("get_state() failed")
             res = self.pipeline.seek_simple(
-                Gst.Format.TIME, Gst.SeekFlags.FLUSH|Gst.SeekFlags.KEY_UNIT,
+                Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
                 resume_time)
+            if not res:
+                print("seek_simple() failed")
         self.pipeline.set_state(Gst.State.PLAYING)
         set_resume_marker(title)
 
     def on_gstreamer_message(self, bus, msg):
-        #print(msg.type)
+        # print(msg.type)
         if msg.type == Gst.EventType.EOS:
             print("current title ended")
             self.play_next()
