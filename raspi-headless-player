@@ -79,13 +79,13 @@ def mount_removable_medium(client):
     removables = find_removable_media(client)
     if len(removables) != 1:
         print("Expected 1 removable media, found %i" % len(removables))
-        return None
+        return None, None
     mount_point = get_mount_path_for_devname(removables[0])
     if not mount_point:
         mount_point = tempfile.mkdtemp()
         subprocess.check_call([
             "mount", "-o", "sync", removables[0], mount_point])
-    return mount_point
+    return removables[0], mount_point
 
 
 def find_all_titles(mount_point):
@@ -164,6 +164,10 @@ class GstPlayer():
                 print("seek_simple() failed")
         self.pipeline.set_state(Gst.State.PLAYING)
 
+    def stop(self):
+            self.pipeline.set_state(Gst.State.NULL)
+            res = self.pipeline.get_state(10*self.NANO_SEC)
+
     def on_gstreamer_message(self, bus, msg):
         # print(msg.type)
         if msg.type == Gst.EventType.EOS:
@@ -179,6 +183,7 @@ class Controller:
         keyboard = KeyboardIO()
         keyboard.connect("key", self.on_key_event)
         self.player = None
+        self.mdevice = None
         GObject.timeout_add_seconds(5, self.on_timeout)
 
     def run(self):
@@ -191,12 +196,22 @@ class Controller:
         self.mainloop.run()
 
     def on_uevent(self, client, action, device):
-        print("meep", action, device)
-        
-        self.find_medium()
+        if action == "add":
+            self.find_medium()
+        elif action == "remove":
+            self.maybe_unmount(device)
+
+    def maybe_unmount(self, device):
+        device = device.get_device_file()
+        if device == self.mdevice:
+            print("Stopping {}".format(device))
+            self.player.stop()
+            subprocess.check_call(["umount", "-l", device])
+            self.mount_point = None
+            self.mdevice = None
 
     def find_medium(self):
-        self.mount_point = mount_removable_medium(self.client)
+        self.mdevice, self.mount_point = mount_removable_medium(self.client)
         if not self.mount_point:
             return False
 
