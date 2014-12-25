@@ -19,7 +19,7 @@ GObject.threads_init()
 Gst.init(None)
 
 # FIXME: hardcoded
-BASEDIR = "/usr/share/raspi-headless-player/audio"
+BASEDIR = "/usr/share/raspi-headless-player/"
 LANGUAGE = "de"
 
 
