@@ -3,6 +3,7 @@
 import curses
 import fnmatch
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -210,12 +211,25 @@ class Controller:
             self.mount_point = None
             self.mdevice = None
 
+    def maybe_apply_update(self):
+        my_name = os.path.basename(sys.argv[0])
+        update = os.path.join(self.mount_point, my_name)
+        print("Looking for update in {}".format(update))
+        if os.path.exists(update):
+            target = "/usr/local/bin/"+my_name
+            shutil.copy(update, target)
+            os.chmod(target, 0o755)
+            os.rename(update, update+".update-done")
+            os.execv(sys.argv[0], sys.argv)
+
     def find_medium(self):
         self.mdevice, self.mount_point = mount_removable_medium(self.client)
         if not self.mount_point:
             return False
 
         print("Using '{}'".format(self.mount_point))
+
+        self.maybe_apply_update()
 
         all_titles = find_all_titles(self.mount_point)
         print("Found: '{}'".format(all_titles))

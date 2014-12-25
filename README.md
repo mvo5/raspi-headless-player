@@ -1,3 +1,8 @@
+This is a project to make the raspi a easy to use
+headless audio player.
+
+The notes below need some cleanup and love.
+
 You need:
 $ sudo apt-get install gir1.2-gudev-1.0 gstreamer1.0
 
@@ -20,4 +25,11 @@ slave {
 pcm mmap0;
 }
 }
+"""
+
+You may consider something like this in rc.local:
+"""
+mount -o remount,ro /
+mount --bind /var/log /var/log
+mount -o remount,rw /var/log
 """
