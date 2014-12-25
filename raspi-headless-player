@@ -182,10 +182,24 @@ class Controller:
         GObject.timeout_add_seconds(5, self.on_timeout)
 
     def run(self):
-        client = GUdev.Client()
-        self.mount_point = mount_removable_medium(client)
+        self.client = GUdev.Client(subsystems=["block"])
+        self.client.connect("uevent", self.on_uevent)
+
+        self.find_medium()
+
+        self.mainloop = GObject.MainLoop()
+        self.mainloop.run()
+
+    def on_uevent(self, client, action, device):
+        print("meep", action, device)
+        
+        self.find_medium()
+
+    def find_medium(self):
+        self.mount_point = mount_removable_medium(self.client)
         if not self.mount_point:
             return False
+
         print("Using '{}'".format(self.mount_point))
 
         all_titles = find_all_titles(self.mount_point)
@@ -196,15 +210,13 @@ class Controller:
         if resume_title:
             print("Resuming from: {}".format(resume_title))
             try:
-                start_from = all_titles.index(resume_title)
+                start_from = [f[len(self.mount_point):] 
+                              for f in all_titles].index(resume_title)
             except ValueError:
                 print("Can not find '{}'".format(resume_title))
 
         self.player = GstPlayer(all_titles, start_from)
         self.player.play(resume_time)
-
-        self.mainloop = GObject.MainLoop()
-        self.mainloop.run()
 
     def on_key_event(self, keyboard, key):
         if key == curses.KEY_UP:
@@ -224,7 +236,8 @@ class Controller:
             return False
         target = os.path.join(self.mount_point, self.MARKER_FILE)
         with open(target+".new", "w") as fp:
-            fp.write("{}\n{}\n".format(self.player.title, pos))
+            title = self.player.title[len(self.mount_point):]
+            fp.write("{}\n{}\n".format(title, pos))
         os.rename(target+".new", target)
         return True
 
@@ -232,13 +245,13 @@ class Controller:
         target = os.path.join(self.mount_point, self.MARKER_FILE)
         if os.path.exists(target):
             with open(target) as fp:
-                resume_title = fp.readline().strip()
+                resume_title = os.path.join(
+                    self.mount_point, fp.readline().strip())
                 resume_time = int(fp.readline().strip())
                 return resume_title, resume_time
         return None, None
 
     def on_timeout(self):
-        self.set_resume_marker()
         if self.player:
             self.set_resume_marker()
         return True
