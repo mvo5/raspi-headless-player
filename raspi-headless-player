@@ -18,6 +18,10 @@ from gi.repository import (
 GObject.threads_init()
 Gst.init(None)
 
+# FIXME: hardcoded
+BASEDIR = "/usr/share/raspi-headless-player/audio"
+LANGUAGE = "de"
+
 
 # COMPAT only, once a new gudev is available we can use
 #        device.get_parent()
@@ -130,9 +134,11 @@ class CursesUI(GObject.GObject):
         self._render()
 
     def _render(self):
+        self.screen.clear()
         start = max(self.current_index - 1, 0)
         # FIXME: terminal size hardcoded
         end = start+24
+        j = 1
         for i in range(start, end):
             try:
                 title = self.all_titles[i]
@@ -142,7 +148,8 @@ class CursesUI(GObject.GObject):
                 attr = curses.A_BOLD
             else:
                 attr = 0
-            self.screen.addstr(i+1, 0, "{}".format(title), attr)
+            self.screen.addstr(j, 0, "{}".format(title[-78:]), attr)
+            j += 1
         self.screen.refresh()
 
 
@@ -172,10 +179,14 @@ class GstPlayer(GObject.GObject):
 
     def play_next(self):
         self.current_title_index += 1
+        if self.current_title_index >= len(self.all_titles):
+            self.current_title_index = 0
         self.play()
 
     def play_prev(self):
         self.current_title_index -= 1
+        if self.current_title_index < 0:
+            self.current_title_index = len(self.all_titles)-1
         self.play()
 
     @property
@@ -196,8 +207,29 @@ class GstPlayer(GObject.GObject):
                 resume_time)
             if not res:
                 logging.error("seek_simple() failed")
+        self.say_track_nr()
         self.pipeline.set_state(Gst.State.PLAYING)
         self.emit("playing", self.current_title_index)
+
+    def say_track_nr(self):
+        nr_audio = self.current_title_index + 1
+        if nr_audio < 20:
+            nr_audio = "{}/audio/{}/{}.wav".format(
+                BASEDIR, LANGUAGE, nr_audio)
+            subprocess.call(["aplay", nr_audio])
+        elif nr_audio < 99:
+            track = self.current_title_index + 1
+
+            sub_1 = "{}/audio/{}/{}0.wav".format(
+                BASEDIR, LANGUAGE, track // 10)
+            subprocess.call(["aplay", sub_1])
+
+            sub_2 = "{}/audio/{}/{}.wav".format(
+                BASEDIR, LANGUAGE, track % 10)
+            subprocess.call(["aplay", sub_2])
+        else:
+            nr_audio = "{}/audio/{}/too-much.wav".format(BASEDIR, LANGUAGE)
+            subprocess.call(["aplay", nr_audio])
 
     def stop(self):
             self.pipeline.set_state(Gst.State.NULL)
@@ -333,6 +365,10 @@ def main(*args, **kwargs):
 if __name__ == "__main__":
     logging.basicConfig(
         level=logging.DEBUG, filename="/var/log/raspi-headless-player2.log")
+
+    # make run from checkout easy
+    if os.path.exists("./audio"):
+        BASEDIR= "./"
 
     if "--detect" in sys.argv:
         client = GUdev.Client()
