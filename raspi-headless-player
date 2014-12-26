@@ -169,7 +169,8 @@ class GstPlayer(GObject.GObject):
         self.pipeline = Gst.ElementFactory.make("playbin", "player")
         self.bus = self.pipeline.get_bus()
         self.bus.add_signal_watch()
-        self.bus.connect('message', self.on_gstreamer_message)
+        self.bus.connect('message::eos', self.on_eos)
+        #self.bus.connect('message', self.on_message)
 
     def volume_up(self):
         self.pipeline.props.volume += 0.5
@@ -193,9 +194,25 @@ class GstPlayer(GObject.GObject):
     def title(self):
         return self.all_titles[self.current_title_index]
 
-    def play(self, resume_time=None):
+    def pause(self):
+        self.pipeline.set_state(Gst.State.PAUSED)
+
+    def resume(self):
+        self.pipeline.set_state(Gst.State.PLAYING)
+
+    def stop(self):
         self.pipeline.set_state(Gst.State.NULL)
-        #print("Playing {}".format(self.title))
+        res = self.pipeline.get_state(10*self.NANO_SEC)
+
+    def play(self, resume_time=None):
+        # FIXME: broken right now
+        #self.say_track_nr()
+        
+        # we always need to stop first, just changing uri for a already
+        # playing stream is not enough
+        self.stop()
+
+        logging.debug("Playing {}".format(self.title))
         self.pipeline.props.uri = 'file://'+self.title
         if resume_time:
             self.pipeline.set_state(Gst.State.PAUSED)
@@ -207,39 +224,46 @@ class GstPlayer(GObject.GObject):
                 resume_time)
             if not res:
                 logging.error("seek_simple() failed")
-        self.say_track_nr()
         self.pipeline.set_state(Gst.State.PLAYING)
+        res = self.pipeline.get_state(1*self.NANO_SEC)
         self.emit("playing", self.current_title_index)
+
+    # FIXME:
+    def _xxx_broken_aplay(self, path):
+        path = os.path.abspath(path)
+        logging.debug("_aplay {}".format(path))
+        self.pipeline.props.uri = 'file://'+path
+        self.pipeline.set_state(Gst.State.PLAYING)
+        # FIXME: wait for playing to finish
+        logging.debug("/_aplay {}".format(path))
 
     def say_track_nr(self):
         nr_audio = self.current_title_index + 1
         if nr_audio < 20:
             nr_audio = "{}/audio/{}/{}.wav".format(
                 BASEDIR, LANGUAGE, nr_audio)
-            subprocess.call(["aplay", nr_audio])
+            self._aplay(nr_audio)
         elif nr_audio < 99:
             track = self.current_title_index + 1
 
             sub_1 = "{}/audio/{}/{}0.wav".format(
                 BASEDIR, LANGUAGE, track // 10)
-            subprocess.call(["aplay", sub_1])
+            self._aplay(sub_1)
 
             sub_2 = "{}/audio/{}/{}.wav".format(
                 BASEDIR, LANGUAGE, track % 10)
-            subprocess.call(["aplay", sub_2])
+            self._aplay(sub_2)
         else:
             nr_audio = "{}/audio/{}/too-much.wav".format(BASEDIR, LANGUAGE)
-            subprocess.call(["aplay", nr_audio])
+            self._aplay(nr_audio)
 
-    def stop(self):
-            self.pipeline.set_state(Gst.State.NULL)
-            res = self.pipeline.get_state(10*self.NANO_SEC)
+    def on_eos(self, bus, msg):
+        logging.debug("{} {}".format(msg, msg.type))
+        logging.debug("current title ended")
+        self.play_next()
 
-    def on_gstreamer_message(self, bus, msg):
-        # print(msg.type)
-        if msg.type == Gst.EventType.EOS:
-            logging.debug("current title ended")
-            self.play_next()
+    def on_message(self, bus, msg):
+        logging.debug("{} {}".format(msg, msg.type))
 
 
 class Controller:
@@ -329,6 +353,10 @@ class Controller:
             self.player.play_next()
         elif key == ord("q"):
             self.mainloop.quit()
+        elif key == ord("0"):
+            self.player.pause()
+        elif key == ord("1"):
+            self.player.resume()
 
     def set_resume_marker(self):
         ok, pos = self.player.pipeline.query_position(Gst.Format.TIME)
