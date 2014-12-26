@@ -204,16 +204,23 @@ class GstPlayer(GObject.GObject):
         self.pipeline.set_state(Gst.State.NULL)
         res = self.pipeline.get_state(10*self.NANO_SEC)
 
+    def set_playback_file(self, path):
+        logging.debug("set_playback_file {}".format(path))
+        self.pipeline.props.uri = 'file://'+self.title
+        # gstreamer clears self.pipeline.props.uri after EOS so we need to
+        # remember it here
+        self._uri = path
+
     def play(self, resume_time=None):
         # FIXME: broken right now
-        #self.say_track_nr()
+        self.say_track_nr()
         
         # we always need to stop first, just changing uri for a already
         # playing stream is not enough
         self.stop()
 
-        logging.debug("Playing {}".format(self.title))
-        self.pipeline.props.uri = 'file://'+self.title
+        logging.debug("Play {}".format(self.title))
+        self.set_playback_file(self.title)
         if resume_time:
             self.pipeline.set_state(Gst.State.PAUSED)
             res = self.pipeline.get_state(10*self.NANO_SEC)
@@ -229,12 +236,26 @@ class GstPlayer(GObject.GObject):
         self.emit("playing", self.current_title_index)
 
     # FIXME:
-    def _xxx_broken_aplay(self, path):
+    def _aplay(self, path):
+        self.stop()
+
+        def eos(bus, message):
+            logging.debug("eos")
+            loop.quit()
+
         path = os.path.abspath(path)
         logging.debug("_aplay {}".format(path))
-        self.pipeline.props.uri = 'file://'+path
-        self.pipeline.set_state(Gst.State.PLAYING)
-        # FIXME: wait for playing to finish
+
+        # FIXME: keep refs instead of waiting for GC ?
+        pipeline = Gst.ElementFactory.make("playbin", "player")
+        bus = pipeline.get_bus()
+        bus.connect("message::eos", eos)
+        bus.add_signal_watch()
+        pipeline.props.uri = "file://"+path
+        pipeline.set_state(Gst.State.PLAYING)
+        logging.debug(pipeline.get_state(0))
+        loop = GObject.MainLoop()
+        loop.run()
         logging.debug("/_aplay {}".format(path))
 
     def say_track_nr(self):
@@ -258,7 +279,7 @@ class GstPlayer(GObject.GObject):
             self._aplay(nr_audio)
 
     def on_eos(self, bus, msg):
-        logging.debug("{} {}".format(msg, msg.type))
+        #logging.debug("{} {}".format(msg, msg.type))
         logging.debug("current title ended")
         self.play_next()
 
