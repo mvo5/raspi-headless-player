@@ -126,6 +126,9 @@ class CursesUI(GObject.GObject):
         return True
 
     def set_playlist(self, all_titles, start_from):
+        if not all_titles:
+            self.screen.addstr(j, 0, "nothing to play", 0)
+            return
         self.all_titles = all_titles
         self.playing_index = start_from
         self._render()
