@@ -55,7 +55,8 @@ def filter_by_subsystem(udev_client, subsystem, filterfunc):
 def find_removable_media(udev_client):
     def detect(block):
         # single device, no partition
-        if block.get_sysfs_attr_as_int("removable"):
+        if (block.get_sysfs_attr_as_int("removable") and
+            block.get_property("ID_FS_TYPE")):
             return True
         # device with partitions
         return (get_parent(block) and
