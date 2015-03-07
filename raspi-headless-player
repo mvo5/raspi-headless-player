@@ -2,7 +2,9 @@
 
 import curses
 import fnmatch
+import logging
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -15,6 +17,10 @@ from gi.repository import (
 )
 GObject.threads_init()
 Gst.init(None)
+
+# FIXME: hardcoded
+BASEDIR = "/usr/share/raspi-headless-player/"
+LANGUAGE = "de"
 
 
 # COMPAT only, once a new gudev is available we can use
@@ -79,7 +85,7 @@ def mount_removable_medium(client):
     """ find and mount if needed """
     removables = find_removable_media(client)
     if len(removables) != 1:
-        print("Expected 1 removable media, found %i" % len(removables))
+        logging.debug("Expected 1 removable media, found %i" % len(removables))
         return None, None
     mount_point = get_mount_path_for_devname(removables[0])
     if not mount_point:
@@ -98,7 +104,7 @@ def find_all_titles(mount_point):
     return sorted(all_media)
 
 
-class KeyboardIO(GObject.GObject):
+class CursesUI(GObject.GObject):
 
     __gsignals__ = {
         'key': (GObject.SIGNAL_RUN_FIRST, None,
@@ -106,7 +112,8 @@ class KeyboardIO(GObject.GObject):
     }
 
     def __init__(self):
-        super(KeyboardIO, self).__init__()
+        super(CursesUI, self).__init__()
+        self.current_index = -1
         self.screen = curses.initscr()
         curses.noecho()
         curses.cbreak()
@@ -118,18 +125,53 @@ class KeyboardIO(GObject.GObject):
         self.emit("key", key)
         return True
 
+    def set_playlist(self, all_titles, start_from):
+        self.all_titles = all_titles
+        self.playing_index = start_from
+        self._render()
 
-class GstPlayer():
+    def set_playing(self, track_index):
+        self.current_index = track_index
+        self._render()
+
+    def _render(self):
+        self.screen.clear()
+        start = max(self.current_index - 1, 0)
+        # FIXME: terminal size hardcoded
+        end = start+24
+        j = 1
+        for i in range(start, end):
+            try:
+                title = self.all_titles[i]
+            except IndexError:
+                break
+            if i == self.current_index:
+                attr = curses.A_BOLD
+            else:
+                attr = 0
+            self.screen.addstr(j, 0, "{}".format(title[-78:]), attr)
+            j += 1
+        self.screen.refresh()
+
+
+class GstPlayer(GObject.GObject):
 
     NANO_SEC = 1000000000
 
+    __gsignals__ = {
+        'playing': (GObject.SIGNAL_RUN_FIRST, None,
+                    (int, ))
+    }
+
     def __init__(self, all_titles, current_title_index):
+        super(GstPlayer, self).__init__()
         self.all_titles = all_titles
         self.current_title_index = current_title_index
         self.pipeline = Gst.ElementFactory.make("playbin", "player")
         self.bus = self.pipeline.get_bus()
         self.bus.add_signal_watch()
-        self.bus.connect('message', self.on_gstreamer_message)
+        self.bus.connect('message::eos', self.on_eos)
+        #self.bus.connect('message', self.on_message)
 
     def volume_up(self):
         self.pipeline.props.volume += 0.5
@@ -139,41 +181,111 @@ class GstPlayer():
 
     def play_next(self):
         self.current_title_index += 1
+        if self.current_title_index >= len(self.all_titles):
+            self.current_title_index = 0
         self.play()
 
     def play_prev(self):
         self.current_title_index -= 1
+        if self.current_title_index < 0:
+            self.current_title_index = len(self.all_titles)-1
         self.play()
 
     @property
     def title(self):
         return self.all_titles[self.current_title_index]
 
-    def play(self, resume_time=None):
+    def pause(self):
+        self.pipeline.set_state(Gst.State.PAUSED)
+
+    def resume(self):
+        self.pipeline.set_state(Gst.State.PLAYING)
+
+    def stop(self):
         self.pipeline.set_state(Gst.State.NULL)
-        print("Playing {}".format(self.title))
+        res = self.pipeline.get_state(10*self.NANO_SEC)
+
+    def set_playback_file(self, path):
+        logging.debug("set_playback_file {}".format(path))
         self.pipeline.props.uri = 'file://'+self.title
+        # gstreamer clears self.pipeline.props.uri after EOS so we need to
+        # remember it here
+        self._uri = path
+
+    def play(self, resume_time=None):
+        # FIXME: broken right now
+        self.say_track_nr()
+        
+        # we always need to stop first, just changing uri for a already
+        # playing stream is not enough
+        self.stop()
+
+        logging.debug("Play {}".format(self.title))
+        self.set_playback_file(self.title)
         if resume_time:
             self.pipeline.set_state(Gst.State.PAUSED)
             res = self.pipeline.get_state(10*self.NANO_SEC)
             if not res:
-                print("get_state() failed")
+                logging.error("get_state() failed")
             res = self.pipeline.seek_simple(
                 Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
                 resume_time)
             if not res:
-                print("seek_simple() failed")
+                logging.error("seek_simple() failed")
         self.pipeline.set_state(Gst.State.PLAYING)
+        res = self.pipeline.get_state(1*self.NANO_SEC)
+        self.emit("playing", self.current_title_index)
 
-    def stop(self):
-            self.pipeline.set_state(Gst.State.NULL)
-            res = self.pipeline.get_state(10*self.NANO_SEC)
+    # FIXME:
+    def _aplay(self, path):
+        self.stop()
 
-    def on_gstreamer_message(self, bus, msg):
-        # print(msg.type)
-        if msg.type == Gst.EventType.EOS:
-            print("current title ended")
-            self.play_next()
+        def eos(bus, message):
+            logging.debug("eos")
+            loop.quit()
+
+        path = os.path.abspath(path)
+        logging.debug("_aplay {}".format(path))
+
+        # FIXME: keep refs instead of waiting for GC ?
+        pipeline = Gst.ElementFactory.make("playbin", "player")
+        bus = pipeline.get_bus()
+        bus.connect("message::eos", eos)
+        bus.add_signal_watch()
+        pipeline.props.uri = "file://"+path
+        pipeline.set_state(Gst.State.PLAYING)
+        logging.debug(pipeline.get_state(0))
+        loop = GObject.MainLoop()
+        loop.run()
+        logging.debug("/_aplay {}".format(path))
+
+    def say_track_nr(self):
+        nr_audio = self.current_title_index + 1
+        if nr_audio < 20:
+            nr_audio = "{}/audio/{}/{}.wav".format(
+                BASEDIR, LANGUAGE, nr_audio)
+            self._aplay(nr_audio)
+        elif nr_audio < 99:
+            track = self.current_title_index + 1
+
+            sub_1 = "{}/audio/{}/{}0.wav".format(
+                BASEDIR, LANGUAGE, track // 10)
+            self._aplay(sub_1)
+
+            sub_2 = "{}/audio/{}/{}.wav".format(
+                BASEDIR, LANGUAGE, track % 10)
+            self._aplay(sub_2)
+        else:
+            nr_audio = "{}/audio/{}/too-much.wav".format(BASEDIR, LANGUAGE)
+            self._aplay(nr_audio)
+
+    def on_eos(self, bus, msg):
+        #logging.debug("{} {}".format(msg, msg.type))
+        logging.debug("current title ended")
+        self.play_next()
+
+    def on_message(self, bus, msg):
+        logging.debug("{} {}".format(msg, msg.type))
 
 
 class Controller:
@@ -181,8 +293,8 @@ class Controller:
     MARKER_FILE = "current_title"
 
     def __init__(self):
-        keyboard = KeyboardIO()
-        keyboard.connect("key", self.on_key_event)
+        self.ui = CursesUI()
+        self.ui.connect("key", self.on_key_event)
         self.player = None
         self.mdevice = None
         GObject.timeout_add_seconds(5, self.on_timeout)
@@ -205,34 +317,52 @@ class Controller:
     def maybe_unmount(self, device):
         device = device.get_device_file()
         if device == self.mdevice:
-            print("Stopping {}".format(device))
+            logging.debug("Stopping {}".format(device))
             self.player.stop()
             subprocess.check_call(["umount", "-l", device])
             self.mount_point = None
             self.mdevice = None
+
+    def maybe_apply_update(self):
+        my_name = os.path.basename(sys.argv[0])
+        update = os.path.join(self.mount_point, my_name)
+        logging.debug("Looking for update in {}".format(update))
+        if os.path.exists(update):
+            target = "/usr/local/bin/"+my_name
+            shutil.copy(update, target)
+            os.chmod(target, 0o755)
+            os.rename(update, update+".update-done")
+            os.execv(sys.argv[0], sys.argv)
 
     def find_medium(self):
         self.mdevice, self.mount_point = mount_removable_medium(self.client)
         if not self.mount_point:
             return False
 
-        print("Using '{}'".format(self.mount_point))
+        logging.debug("Using '{}'".format(self.mount_point))
+
+        self.maybe_apply_update()
 
         all_titles = find_all_titles(self.mount_point)
-        print("Found: '{}'".format(all_titles))
+        logging.debug("Found: '{}'".format(all_titles))
 
         start_from = 0
         resume_title, resume_time = self.find_resume_marker()
         if resume_title:
-            print("Resuming from: {}".format(resume_title))
+            logging.debug("Resuming from: {}".format(resume_title))
             try:
                 start_from = [f[len(self.mount_point):] 
                               for f in all_titles].index(resume_title)
             except ValueError:
-                print("Can not find '{}'".format(resume_title))
-
+                logging.debug("Can not find '{}'".format(resume_title))
+        
+        self.ui.set_playlist(all_titles, start_from)
         self.player = GstPlayer(all_titles, start_from)
+        self.player.connect("playing", self.on_playing_changed)
         self.player.play(resume_time)
+
+    def on_playing_changed(self, player, track_index):
+        self.ui.set_playing(track_index)
 
     def on_key_event(self, keyboard, key):
         if key == curses.KEY_UP:
@@ -245,6 +375,10 @@ class Controller:
             self.player.play_next()
         elif key == ord("q"):
             self.mainloop.quit()
+        elif key == ord("0"):
+            self.player.pause()
+        elif key == ord("1"):
+            self.player.resume()
 
     def set_resume_marker(self):
         ok, pos = self.player.pipeline.query_position(Gst.Format.TIME)
@@ -279,6 +413,13 @@ def main(*args, **kwargs):
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.DEBUG, filename="/var/log/raspi-headless-player2.log")
+
+    # make run from checkout easy
+    if os.path.exists("./audio"):
+        BASEDIR= "./"
+
     if "--detect" in sys.argv:
         client = GUdev.Client()
         print "removable: ", find_removable_media(client)
