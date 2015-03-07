@@ -119,6 +119,8 @@ class CursesUI(GObject.GObject):
         curses.cbreak()
         self.screen.keypad(True)
         GLib.io_add_watch(sys.stdin, GLib.IO_IN, self.io_callback)
+        self.screen.addstr(0, 0, "nothing to play", 0)
+        self.screen.refresh()
 
     def io_callback(self, fd, condition):
         key = self.screen.getch()
@@ -127,7 +129,8 @@ class CursesUI(GObject.GObject):
 
     def set_playlist(self, all_titles, start_from):
         if not all_titles:
-            self.screen.addstr(j, 0, "nothing to play", 0)
+            self.screen.addstr(0, 0, "nothing to play", 0)
+            self.screen.refresh()
             return
         self.all_titles = all_titles
         self.playing_index = start_from
