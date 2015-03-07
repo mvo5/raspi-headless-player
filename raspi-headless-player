@@ -378,9 +378,9 @@ class Controller:
             self.player.play_next()
         elif key == ord("q"):
             self.mainloop.quit()
-        elif key == ord("0") or key == cuses.KEY_IC:
+        elif key == ord("0") or key == 331: #numpad "0"
             self.player.pause()
-        elif key == ord("1") or key == cuses.KEY_END:
+        elif key == ord("1") or key == 360: # numpad "1"
             self.player.resume()
 
     def set_resume_marker(self):
