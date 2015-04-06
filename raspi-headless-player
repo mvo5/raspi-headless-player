@@ -265,23 +265,37 @@ class GstPlayer(GObject.GObject):
         loop.run()
         logging.debug("/_aplay {}".format(path))
 
+    def _say_gt20_lt100(self, track):
+        """Say a number between 20 and 99 """
+        sub_1 = "{}/audio/{}/{}0.wav".format(
+            BASEDIR, LANGUAGE, track // 10)
+        self._aplay(sub_1)
+        if track % 10 > 0:
+            sub_2 = "{}/audio/{}/{}.wav".format(
+                BASEDIR, LANGUAGE, track % 10)
+            self._aplay(sub_2)
+
+    def _say_lt20(self, track):
+        """Say a number less than 20"""
+        nr_audio = "{}/audio/{}/{}.wav".format(
+            BASEDIR, LANGUAGE, track)
+        self._aplay(nr_audio)
+
+    def _say_gt99(self, track):
+        """Say a number greater than 99"""
+        sub_1 = "{}/audio/{}/{}00.wav".format(
+            BASEDIR, LANGUAGE, track // 100)
+        self._aplay(sub_1)
+        self._say_gt20_lt100(track%100)
+
     def say_track_nr(self):
         nr_audio = self.current_title_index + 1
         if nr_audio < 20:
-            nr_audio = "{}/audio/{}/{}.wav".format(
-                BASEDIR, LANGUAGE, nr_audio)
-            self._aplay(nr_audio)
+            self._say_lt20(nr_audio)
         elif nr_audio < 99:
-            track = self.current_title_index + 1
-
-            sub_1 = "{}/audio/{}/{}0.wav".format(
-                BASEDIR, LANGUAGE, track // 10)
-            self._aplay(sub_1)
-
-            if track % 10 > 0:
-                sub_2 = "{}/audio/{}/{}.wav".format(
-                    BASEDIR, LANGUAGE, track % 10)
-                self._aplay(sub_2)
+            self._say_gt20_lt100(nr_audio)
+        elif nr_audio < 999:
+            self._say_gt99(nr_audio)
         else:
             nr_audio = "{}/audio/{}/too-much.wav".format(BASEDIR, LANGUAGE)
             self._aplay(nr_audio)
