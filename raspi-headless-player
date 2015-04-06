@@ -278,9 +278,10 @@ class GstPlayer(GObject.GObject):
                 BASEDIR, LANGUAGE, track // 10)
             self._aplay(sub_1)
 
-            sub_2 = "{}/audio/{}/{}.wav".format(
-                BASEDIR, LANGUAGE, track % 10)
-            self._aplay(sub_2)
+            if track % 10 > 0:
+                sub_2 = "{}/audio/{}/{}.wav".format(
+                    BASEDIR, LANGUAGE, track % 10)
+                self._aplay(sub_2)
         else:
             nr_audio = "{}/audio/{}/too-much.wav".format(BASEDIR, LANGUAGE)
             self._aplay(nr_audio)
